@@ -19,12 +19,11 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
+import java.util.concurrent.*;
 
 public class HttpServerPerf {
     private static final String INPUT_FILE = "./resources/throughput/war_and_peace.txt";
-    private static final int THREAD_POOL_SIZE = 1;
+    private static final int THREAD_POOL_SIZE = Runtime.getRuntime().availableProcessors(); // Use all CPU cores;
     public static void main(String[] args) throws IOException {
         String text = new String(Files.readAllBytes(Paths.get(INPUT_FILE)));
 
@@ -42,8 +41,32 @@ public class HttpServerPerf {
         int port = 8000;
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
         server.createContext("/search", new WordCountHandler(text));
-        Executor executor = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
+        // Use ThreadPoolExecutor
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(
+                THREAD_POOL_SIZE,
+                THREAD_POOL_SIZE,
+                0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<>()
+        );
         server.setExecutor(executor);
+        // Start monitoring thread here
+        new Thread(() -> {
+            while (true) {
+                try {
+                    System.out.printf(
+                            "Pool size: %d | Active: %d | Completed: %d | Queue: %d%n",
+                            executor.getPoolSize(),
+                            executor.getActiveCount(),
+                            executor.getCompletedTaskCount(),
+                            executor.getQueue().size()
+                    );
+                    Thread.sleep(2000); // sleep 2 seconds before next log
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }).start();
         server.start();
         System.out.println("Server started on port " + port);
     }
@@ -66,6 +89,7 @@ public class HttpServerPerf {
         }
         @Override
         public void handle(HttpExchange httpExchange) throws IOException {
+            System.out.println("Handling request on thread: " + Thread.currentThread().getName());
             String query = httpExchange.getRequestURI().getQuery();
             String[] keyValue = query.split("=");
             String action = keyValue[0];
