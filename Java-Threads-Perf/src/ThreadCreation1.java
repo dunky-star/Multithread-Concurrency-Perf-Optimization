@@ -1,4 +1,4 @@
-public class ThreadCreation {
+public class ThreadCreation1 {
     public static void main(String[] args) throws InterruptedException {
         Thread thread = new Thread(new Runnable() {
             @Override
