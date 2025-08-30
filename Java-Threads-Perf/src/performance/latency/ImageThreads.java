@@ -1,5 +1,11 @@
 package performance.latency;
 
+/*
+ * Copyright (c) 2025-2025. Geoffrey Duncan Opiyo
+ * https://dunkystars.com
+ * All rights reserved
+ */
+
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.*;
@@ -9,8 +15,8 @@ import java.util.concurrent.*;
  * Optimizing for Latency using FixedThreadPool ExecutorService
  */
 public class ImageThreads {
-    public static final String SOURCE_FILE = "./resources/input/many-flowers.jpg";
-    public static final String DESTINATION_FILE = "./resources/output/many-flowers.jpg";
+    private static final String SOURCE_FILE = "./resources/input/many-flowers.jpg";
+    private static final String DESTINATION_FILE = "./resources/output/many-flowers.jpg";
 
     public static void main(String[] args) throws IOException {
         BufferedImage originalImage = ImageIO.read(new File(SOURCE_FILE));
