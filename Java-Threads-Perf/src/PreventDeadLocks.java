@@ -5,7 +5,7 @@ import java.util.Random;
  * Two trains (TrainA and TrainB) are trying to pass through an intersection that has two roads (roadA and roadB).
  * Each train needs to lock both roads to pass through the intersection.
  * The program uses synchronized blocks to ensure that the locks are acquired in a consistent order,
- * and lock acquisition order should be the same (This prevents deadlocks from occurring).
+ * and enforcing a strick order on the lock acquisition (This prevents deadlocks from occurring).
  */
 
 public class PreventDeadLocks {
