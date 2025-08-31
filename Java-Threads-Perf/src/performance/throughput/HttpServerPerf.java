@@ -17,109 +17,120 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.*;
 import java.util.concurrent.*;
 
 public class HttpServerPerf {
     private static final String INPUT_FILE = "./resources/throughput/war_and_peace.txt";
-    private static final int THREAD_POOL_SIZE = Runtime.getRuntime().availableProcessors(); // Use all CPU cores;
-    public static void main(String[] args) throws IOException {
-        String text = new String(Files.readAllBytes(Paths.get(INPUT_FILE)));
+    private static final int PORT = 8000;
+    private static final int CORE = Runtime.getRuntime().availableProcessors();
+    private static final int max  = CORE * 3;  // small burst headroom
 
-        // Split on the line break
-        String[] lines = text.split("\\R");  // \\R matches any line break sequence
-        // Print first 5 or fewer if file
-        for (int i = 0; i < Math.min(5, lines.length); i++) {
-            System.out.println(lines[i]);
-        }
+    public static void main(String[] args) throws IOException {
+        // Read whole file as String
+        String text = new String(Files.readAllBytes(Paths.get(INPUT_FILE)), StandardCharsets.UTF_8);
+
+        // Preview first 5 lines (unchanged)
+        String[] lines = text.split("\\R");
+        for (int i = 0; i < Math.min(5, lines.length); i++) System.out.println(lines[i]);
         System.out.println("Total lines: " + lines.length);
-        startServer(text);
+
+        // Build word -> count map ONCE (lowercase tokens)
+        Map<String, Integer> freq = new HashMap<>(131_072);
+        for (String tok : text.toLowerCase(Locale.ROOT).split("[^\\p{L}\\p{N}]+")) {
+            if (!tok.isEmpty()) freq.merge(tok, 1, Integer::sum);
+        }
+
+        startServer(freq);
     }
 
-    public static void startServer(String text) throws IOException {
-        int port = 8000;
-        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
-        server.createContext("/search", new WordCountHandler(text));
-        // Use ThreadPoolExecutor
+    private static void startServer(Map<String, Integer> freq) throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress(PORT), 0);
+        server.createContext("/search", new WordCountHandler(freq));
+
+        // bounded queue (tune)
+        final int QUEUE_CAPACITY = 10000;
         ThreadPoolExecutor executor = new ThreadPoolExecutor(
-                THREAD_POOL_SIZE,
-                THREAD_POOL_SIZE,
-                0L, TimeUnit.MILLISECONDS,
-                new LinkedBlockingQueue<>()
+                CORE,
+                max,
+                30, TimeUnit.SECONDS,  // keep-alive for idle threads
+                new ArrayBlockingQueue<>(QUEUE_CAPACITY),     // bounded queue
+                new ThreadPoolExecutor.CallerRunsPolicy() // throttles caller under pressure
         );
         server.setExecutor(executor);
-        // Start monitoring thread here
-        new Thread(() -> {
-            while (true) {
-                try {
-                    System.out.printf(
-                            "Pool size: %d | Active: %d | Completed: %d | Queue: %d%n",
+
+        // Light monitor (daemon) – keep or comment during formal runs
+        Thread monitor = new Thread(() -> {
+            try {
+                while (true) {
+                    System.out.printf("Pool:%d Active:%d Completed:%d Queue:%d%n",
                             executor.getPoolSize(),
                             executor.getActiveCount(),
                             executor.getCompletedTaskCount(),
-                            executor.getQueue().size()
-                    );
-                    Thread.sleep(2000); // sleep 2 seconds before next log
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
+                            executor.getQueue().size());
+                    Thread.sleep(2000);
                 }
-            }
-        }).start();
+            } catch (InterruptedException ignored) { }
+        }, "pool-monitor");
+        monitor.setDaemon(true);
+        monitor.start();
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            server.stop(0);
+            executor.shutdown();
+        }));
+
         server.start();
-        System.out.println("Server started on port " + port);
+        System.out.println("Server started on port " + PORT);
     }
 
     private static class WordCountHandler implements HttpHandler {
+        private final Map<String, Integer> freq;
 
-        /**
-         * Handle the given request and generate an appropriate response.
-         * See {@link HttpExchange} for a description of the steps
-         * involved in handling an exchange.
-         *
-         * @param exchange the exchange containing the request from the
-         *                 client and used to send the response
-         * @throws NullPointerException if exchange is {@code null}
-         * @throws IOException          if an I/O error occurs
-         */
-        private String text;
-        public WordCountHandler(String text) {
-            this.text = text;
-        }
+        WordCountHandler(Map<String, Integer> freq) { this.freq = freq; }
+
         @Override
-        public void handle(HttpExchange httpExchange) throws IOException {
-            System.out.println("Handling request on thread: " + Thread.currentThread().getName());
-            String query = httpExchange.getRequestURI().getQuery();
-            String[] keyValue = query.split("=");
-            String action = keyValue[0];
-            String word = keyValue[1];
-            if(!action.equals("word")) {
-               httpExchange.sendResponseHeaders(400, 0);
+        public void handle(HttpExchange ex) throws IOException {
+            // Avoid per-request println during load
+            if (!"GET".equalsIgnoreCase(ex.getRequestMethod())) {
+                send(ex, 405, "Method Not Allowed");
                 return;
             }
-
-            long count = countWord(word);
-
-            byte [] response = Long.toString(count).getBytes();
-            httpExchange.sendResponseHeaders(200, response.length);
-            OutputStream outputStream = httpExchange.getResponseBody();
-            outputStream.write(response);
-            outputStream.close();
+            String raw = ex.getRequestURI().getRawQuery();
+            if (raw == null || raw.isEmpty()) {
+                send(ex, 400, "Missing query string. Use /search?word=Golang");
+                return;
+            }
+            String word = firstParam(raw, "word");
+            if (word == null || word.isEmpty()) {
+                send(ex, 400, "Missing 'word' parameter");
+                return;
+            }
+            int count = freq.getOrDefault(word.toLowerCase(Locale.ROOT), 0);
+            send(ex, 200, Integer.toString(count));
         }
 
-        private long countWord(String word) {
-            long count = 0;
-            int index = 0;
-            while(index >= 0) {
-                index = text.indexOf(word, index);
-                if(index >= 0) {
-                    count++;
-                    index++;
+        private String firstParam(String raw, String key) {
+            for (String p : raw.split("&")) {
+                int i = p.indexOf('=');
+                String k = i >= 0 ? p.substring(0, i) : p;
+                if (k.equals(key)) {
+                    String v = i >= 0 ? p.substring(i + 1) : "";
+                    return URLDecoder.decode(v, StandardCharsets.UTF_8);
                 }
             }
-            return count;
+            return null;
+        }
+
+        private void send(HttpExchange ex, int status, String body) throws IOException {
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            ex.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
+            ex.sendResponseHeaders(status, bytes.length);
+            try (OutputStream os = ex.getResponseBody()) { os.write(bytes); }
         }
     }
-
 }
