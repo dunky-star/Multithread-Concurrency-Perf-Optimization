@@ -14,3 +14,4 @@ e. Advanced lock-free algorithms and data structures for increased responsivenes
 [More resources]
 https://docs.oracle.com/javase/8/docs/api/java/lang/Thread.State.html
 https://developer.ibm.com/tutorials/l-completely-fair-scheduler/
+https://docs.oracle.com/javase/specs/jls/se7/html/jls-17.html#jls-17.7
