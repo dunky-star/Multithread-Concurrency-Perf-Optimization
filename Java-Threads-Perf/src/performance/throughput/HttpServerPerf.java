@@ -27,8 +27,7 @@ import java.util.concurrent.*;
 public class HttpServerPerf {
     private static final String INPUT_FILE = "./resources/throughput/war_and_peace.txt";
     private static final int PORT = 8000;
-    private static final int CORE = Runtime.getRuntime().availableProcessors();
-    private static final int max  = CORE * 3;  // small burst headroom
+    private static final int CORE = Math.max(1, Runtime.getRuntime().availableProcessors());
 
     public static void main(String[] args) throws IOException {
         // Read whole file as String
@@ -53,10 +52,11 @@ public class HttpServerPerf {
         server.createContext("/search", new WordCountHandler(freq));
 
         // bounded queue (tune)
-        final int QUEUE_CAPACITY = 10000;
+        final int QUEUE_CAPACITY = 5000;
+
         ThreadPoolExecutor executor = new ThreadPoolExecutor(
                 CORE,
-                max,
+                CORE,
                 30, TimeUnit.SECONDS,  // keep-alive for idle threads
                 new ArrayBlockingQueue<>(QUEUE_CAPACITY),     // bounded queue
                 new ThreadPoolExecutor.CallerRunsPolicy() // throttles caller under pressure
